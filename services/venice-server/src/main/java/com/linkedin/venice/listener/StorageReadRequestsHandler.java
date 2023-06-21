@@ -436,6 +436,10 @@ public class StorageReadRequestsHandler extends ChannelInboundHandlerAdapter {
     return response;
   }
 
+  public ReadResponse handleSingleGetGrpcRequest(GetRouterRequest request) {
+    return handleSingleGetRequest(request);
+  }
+
   private CompletableFuture<ReadResponse> handleMultiGetRequestInParallel(
       MultiGetRouterRequestWrapper request,
       int parallelChunkSize) {

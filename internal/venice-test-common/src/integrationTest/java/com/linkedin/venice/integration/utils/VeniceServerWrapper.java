@@ -232,8 +232,8 @@ public class VeniceServerWrapper extends ProcessWrapper implements MetricsAware 
         serverPropsBuilder.put(KafkaTestUtils.getLocalCommonKafkaSSLConfig(SslUtils.getTlsConfiguration()));
       }
 
+      serverPropsBuilder.put(ENABLE_GRPC_READ_SERVER, isGrpcEnabled);
       if (isGrpcEnabled) {
-        serverPropsBuilder.put(ENABLE_GRPC_READ_SERVER, true);
         serverPropsBuilder.put(GRPC_READ_SERVER_PORT, TestUtils.getFreePort());
       }
 
@@ -345,6 +345,10 @@ public class VeniceServerWrapper extends ProcessWrapper implements MetricsAware 
    */
   public int getAdminPort() {
     return serverProps.getInt(ADMIN_PORT);
+  }
+
+  public int getGrpcPort() {
+    return serverProps.getInt(GRPC_READ_SERVER_PORT);
   }
 
   @Override
