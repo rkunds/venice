@@ -559,8 +559,11 @@ public class StorageReadRequestsHandler extends ChannelInboundHandlerAdapter {
         responseWrapper.addRecord(record);
       }
     }
-
     return responseWrapper;
+  }
+
+  public ReadResponse handleMultiGetGrpcRequest(MultiGetRouterRequestWrapper request) {
+    return handleMultiGetRequest(request);
   }
 
   private ReadResponse handleComputeRequest(ComputeRouterRequestWrapper request) {

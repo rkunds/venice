@@ -413,8 +413,9 @@ public class VeniceServerConfig extends VeniceClusterConfig {
       throws ConfigurationException {
     super(serverProperties, kafkaClusterMap);
     listenerPort = serverProperties.getInt(LISTENER_PORT, 0);
-    grpcPort = serverProperties.getInt(GRPC_READ_SERVER_PORT, 0);
     isGrpcEnabled = serverProperties.getBoolean(ENABLE_GRPC_READ_SERVER, false);
+    grpcPort = isGrpcEnabled ? serverProperties.getInt(GRPC_READ_SERVER_PORT) : -1;
+
     listernerHostname = serverProperties.getString(LISTENER_HOSTNAME, () -> Utils.getHostName());
     dataBasePath = serverProperties.getString(
         DATA_BASE_PATH,
