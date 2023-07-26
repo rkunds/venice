@@ -66,7 +66,7 @@ public class GetRouterRequest extends RouterRequest {
     }
   }
 
-  public static GetRouterRequest grpcGetRouterRequest(VeniceClientRequest request) {
+  public static RouterRequest grpcGetRouterRequest(VeniceClientRequest request) {
     String resourceName = request.getResourceName();
     int partition = request.getPartition();
     byte[] keyBytes = getKeyBytesFromUrlKeyString(request.getKeyString());

@@ -11,6 +11,7 @@ import com.linkedin.venice.fastclient.meta.StoreMetadataFetchMode;
 import com.linkedin.venice.fastclient.utils.AbstractClientEndToEndSetup;
 import com.linkedin.venice.utils.TestUtils;
 import io.tehuti.metrics.MetricsRepository;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.apache.avro.generic.GenericRecord;
 import org.testng.annotations.Test;
@@ -19,6 +20,8 @@ import org.testng.annotations.Test;
 public class FastClientServerReadQuotaTest extends AbstractClientEndToEndSetup {
   @Test(timeOut = TIME_OUT)
   public void testServerReadQuota() throws Exception {
+    Map<String, String> res = veniceCluster.getNettyToGrpcServerMap();
+    System.out.println("venice server map: " + res);
     ClientConfig.ClientConfigBuilder clientConfigBuilder =
         new ClientConfig.ClientConfigBuilder<>().setStoreName(storeName)
             .setR2Client(r2Client)

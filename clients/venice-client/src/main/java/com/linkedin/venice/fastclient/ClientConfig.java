@@ -121,7 +121,7 @@ public class ClientConfig<K, V, T extends SpecificRecord> {
     if (storeName == null || storeName.isEmpty()) {
       throw new VeniceClientException("storeName param shouldn't be empty");
     }
-    if (r2Client == null) {
+    if (r2Client == null && !useGrpc) {
       throw new VeniceClientException("r2Client param shouldn't be null");
     }
     if (useGrpc && nettyServerToGrpcAddressMap == null) {

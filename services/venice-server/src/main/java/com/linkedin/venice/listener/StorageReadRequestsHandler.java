@@ -27,6 +27,8 @@ import com.linkedin.venice.compute.protocol.request.router.ComputeRouterRequestK
 import com.linkedin.venice.compute.protocol.response.ComputeResponseRecordV1;
 import com.linkedin.venice.exceptions.VeniceException;
 import com.linkedin.venice.exceptions.VeniceNoStoreException;
+import com.linkedin.venice.listener.grpc.GrpcHandlerContext;
+import com.linkedin.venice.listener.grpc.VeniceGrpcHandler;
 import com.linkedin.venice.listener.request.AdminRequest;
 import com.linkedin.venice.listener.request.ComputeRouterRequestWrapper;
 import com.linkedin.venice.listener.request.DictionaryFetchRequest;
@@ -100,7 +102,7 @@ import org.apache.logging.log4j.Logger;
  * handler will execute parallel lookups for {@link MultiGetRouterRequestWrapper}.
  */
 @ChannelHandler.Sharable
-public class StorageReadRequestsHandler extends ChannelInboundHandlerAdapter {
+public class StorageReadRequestsHandler extends ChannelInboundHandlerAdapter implements VeniceGrpcHandler {
   private static final Logger LOGGER = LogManager.getLogger(StorageReadRequestsHandler.class);
 
   /**
@@ -132,6 +134,7 @@ public class StorageReadRequestsHandler extends ChannelInboundHandlerAdapter {
       new VeniceConcurrentHashMap<>();
   private final StorageEngineBackedCompressorFactory compressorFactory;
   private final Optional<ResourceReadUsageTracker> resourceReadUsageTracker;
+  private int test;
 
   private static class StorageExecReusableObjects {
     // reuse buffer for rocksDB value object
@@ -332,6 +335,19 @@ public class StorageReadRequestsHandler extends ChannelInboundHandlerAdapter {
     }
   }
 
+  public void grpcRead(GrpcHandlerContext ctx) {
+    RouterRequest routerRequest = ctx.getRouterRequest();
+
+    ReadResponse readResponse = handleGrpcRequest(routerRequest);
+
+    ctx.setReadResponse(readResponse);
+  }
+
+  public void grpcWrite(GrpcHandlerContext ctx) {
+    // no-op
+    return;
+  }
+
   private ThreadPoolExecutor getExecutor(RequestType requestType) {
     switch (requestType) {
       case SINGLE_GET:
@@ -342,6 +358,36 @@ public class StorageReadRequestsHandler extends ChannelInboundHandlerAdapter {
       default:
         throw new VeniceException("Request type " + requestType + " is not supported.");
     }
+  }
+
+  public ReadResponse handleGrpcRequest(RouterRequest request) {
+    final long preSubmissionTimeNs = System.nanoTime();
+
+    if (request.shouldRequestBeTerminatedEarly()) {
+      throw new VeniceRequestEarlyTerminationException(request.getStoreName());
+    }
+
+    double submissionWaitTime = LatencyUtils.getLatencyInMS(preSubmissionTimeNs);
+    ReadResponse response;
+    switch (request.getRequestType()) {
+      case SINGLE_GET:
+        response = handleSingleGetRequest((GetRouterRequest) request);
+        break;
+      case MULTI_GET:
+        response = handleMultiGetRequest((MultiGetRouterRequestWrapper) request);
+        break;
+      default:
+        throw new VeniceException("Unknown request type: " + request.getRequestType());
+    }
+
+    response.setStorageExecutionSubmissionWaitTime(submissionWaitTime);
+    // will not set queue length for grpc, no custom executor exists for gRPC implementation yet
+    response.setRCU(ReadQuotaEnforcementHandler.getRcu(request));
+    if (request.isStreamingRequest()) {
+      response.setStreamingResponse();
+    }
+
+    return response;
   }
 
   private int getSubPartitionId(int userPartition, byte[] keyBytes, PerStoreVersionState perStoreVersionState) {
@@ -436,6 +482,7 @@ public class StorageReadRequestsHandler extends ChannelInboundHandlerAdapter {
     return response;
   }
 
+  @Deprecated
   public ReadResponse handleSingleGetGrpcRequest(GetRouterRequest request) {
     return handleSingleGetRequest(request);
   }
@@ -562,6 +609,7 @@ public class StorageReadRequestsHandler extends ChannelInboundHandlerAdapter {
     return responseWrapper;
   }
 
+  @Deprecated
   public ReadResponse handleMultiGetGrpcRequest(MultiGetRouterRequestWrapper request) {
     return handleMultiGetRequest(request);
   }
