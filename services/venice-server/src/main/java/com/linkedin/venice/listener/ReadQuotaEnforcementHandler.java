@@ -4,6 +4,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 import com.linkedin.venice.exceptions.VeniceException;
 import com.linkedin.venice.exceptions.VeniceNoHelixResourceException;
+import com.linkedin.venice.grpc.GrpcErrorCodes;
 import com.linkedin.venice.helix.HelixCustomizedViewOfflinePushRepository;
 import com.linkedin.venice.helix.ResourceAssignment;
 import com.linkedin.venice.listener.request.RouterRequest;
@@ -188,6 +189,86 @@ public class ReadQuotaEnforcementHandler extends SimpleChannelInboundHandler<Rou
     ctx.fireChannelRead(request);
     stats.recordAllowed(storeName, rcu);
     stats.recordReadQuotaUsage(storeName, storageNodeBucket.getStaleUsageRatio());
+  }
+
+  @Override
+  public void grpcRead(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+    RouterRequest request = ctx.getRouterRequest();
+    String storeName = request.getStoreName();
+    Store store = storeRepository.getStore(storeName);
+
+    if (store == null) {
+      String error = "Invalid request resource " + request.getResourceName();
+      LOGGER.error(error);
+      ctx.setError();
+      ctx.getVeniceServerResponseBuilder().setErrorCode(GrpcErrorCodes.BAD_REQUEST).setErrorMessage(error);
+      pipeline.processRequest(ctx);
+      return;
+    }
+
+    if (!isInitialized() || !store.isStorageNodeReadQuotaEnabled()) {
+      ReferenceCountUtil.retain(request);
+      // no quota limit is enforced
+      pipeline.processRequest(ctx);
+      return;
+    }
+
+    int rcu = getRcu(request); // read capacity units
+
+    TokenBucket tokenBucket = storeVersionBuckets.get(request.getResourceName());
+    if (tokenBucket != null && !request.isRetryRequest()) {
+      if (!tokenBucket.tryConsume(rcu)) {
+        stats.recordRejected(storeName, rcu);
+
+        if (enforcing) {
+          long storeQuota = store.getReadQuotaInCU();
+          float thisNodeRcuPerSecond = storeVersionBuckets.get(request.getResourceName()).getAmortizedRefillPerSecond();
+
+          String errorMessage =
+              "Total quota for store " + storeName + " is " + storeQuota + " RCU per second. Storage Node " + thisNodeId
+                  + " is allocated " + thisNodeRcuPerSecond + " RCU per second which has been exceeded.";
+
+          LOGGER.error(errorMessage);
+          ctx.setError();
+          ctx.getVeniceServerResponseBuilder()
+              .setErrorCode(GrpcErrorCodes.TOO_MANY_REQUESTS)
+              .setErrorMessage(errorMessage);
+          pipeline.processRequest(ctx);
+          return;
+        }
+      }
+    } else if (enforcing && !noBucketStores.contains(request.getResourceName())) {
+      LOGGER.warn(
+          "Request for resource: {} but no TokenBucket for that resource. Not yet enforcing quota",
+          request.getResourceName());
+
+      noBucketStores.add(request.getResourceName());
+    }
+
+    if (!storageNodeBucket.tryConsume(rcu)) {
+      stats.recordRejected(storeName, rcu);
+      if (enforcing) {
+        LOGGER.error("Server over capacity when performing gRPC request");
+        String errorMessage = "Server over capacity";
+        ctx.setError();
+        ctx.getVeniceServerResponseBuilder()
+            .setErrorCode(GrpcErrorCodes.SERVICE_UNAVAILABLE)
+            .setErrorMessage(errorMessage);
+        pipeline.processRequest(ctx);
+        return;
+      }
+    }
+
+    ReferenceCountUtil.retain(request);
+    stats.recordAllowed(storeName, rcu);
+    stats.recordReadQuotaUsage(storeName, storageNodeBucket.getStaleUsageRatio());
+
+    pipeline.processRequest(ctx);
+  }
+
+  @Override
+  public void grpcWrite(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+    pipeline.processResponse(ctx);
   }
 
   /**

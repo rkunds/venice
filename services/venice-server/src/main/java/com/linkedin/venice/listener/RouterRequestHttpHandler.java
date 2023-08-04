@@ -11,6 +11,7 @@ import com.linkedin.venice.listener.request.MultiGetRouterRequestWrapper;
 import com.linkedin.venice.listener.request.RouterRequest;
 import com.linkedin.venice.listener.response.HttpShortcutResponse;
 import com.linkedin.venice.meta.QueryAction;
+import com.linkedin.venice.protocols.VeniceClientRequest;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.FullHttpRequest;
@@ -124,6 +125,26 @@ public class RouterRequestHttpHandler extends SimpleChannelInboundHandler<FullHt
     } catch (VeniceException e) {
       ctx.writeAndFlush(new HttpShortcutResponse(e.getMessage(), HttpResponseStatus.BAD_REQUEST));
     }
+  }
+
+  @Override
+  public void grpcRead(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+    VeniceClientRequest clientRequest = ctx.getVeniceClientRequest();
+    GrpcStatsContext statsContext = ctx.getGrpcStatsContext();
+
+    RouterRequest routerRequest = clientRequest.getIsBatchRequest()
+        ? MultiGetRouterRequestWrapper.parseMultiGetGrpcRequest(clientRequest)
+        : GetRouterRequest.grpcGetRouterRequest(clientRequest);
+
+    statsContext.setRequestInfo(routerRequest);
+
+    ctx.setRouterRequest(routerRequest);
+    pipeline.processRequest(ctx);
+  }
+
+  @Override
+  public void grpcWrite(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+    pipeline.processResponse(ctx);
   }
 
   /**

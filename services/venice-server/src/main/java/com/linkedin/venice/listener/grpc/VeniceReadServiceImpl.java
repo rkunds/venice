@@ -7,7 +7,6 @@ import com.linkedin.venice.compression.CompressionStrategy;
 import com.linkedin.venice.listener.StorageReadRequestHandler;
 import com.linkedin.venice.listener.request.GetRouterRequest;
 import com.linkedin.venice.listener.request.MultiGetRouterRequestWrapper;
-import com.linkedin.venice.listener.response.StorageResponseObject;
 import com.linkedin.venice.protocols.VeniceClientRequest;
 import com.linkedin.venice.protocols.VeniceReadServiceGrpc;
 import com.linkedin.venice.protocols.VeniceServerResponse;
@@ -49,8 +48,8 @@ public class VeniceReadServiceImpl extends VeniceReadServiceGrpc.VeniceReadServi
   private VeniceServerResponse handleSingleGetRequest(VeniceClientRequest request) {
     GetRouterRequest getRouterRequest = GetRouterRequest.grpcGetRouterRequest(request);
 
-    StorageResponseObject response =
-        (StorageResponseObject) storageReadRequestHandler.handleSingleGetGrpcRequest(getRouterRequest);
+    requestPipeline.processRequest(ctx);
+    requestPipeline.processResponse(ctx);
 
     ValueRecord valueRecord = response.getValueRecord();
     CompressionStrategy compressionStrategy = response.getCompressionStrategy();

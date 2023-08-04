@@ -315,4 +315,23 @@ public class ReadQuotaEnforcementHandlerTest {
       return null;
     }).when(ctx).fireChannelRead(any());
   }
+
+  void setUpGrpcMocks(
+      GrpcHandlerContext grpcCtx,
+      VeniceServerResponse.Builder builder,
+      GrpcHandlerPipeline pipeline,
+      AtomicInteger allowed,
+      AtomicInteger blocked,
+      RouterRequest request) {
+    doReturn(request).when(grpcCtx).getRouterRequest();
+    doReturn(builder).when(grpcCtx).getVeniceServerResponseBuilder();
+    doAnswer((a) -> {
+      allowed.incrementAndGet();
+      return null;
+    }).when(pipeline).processRequest(any());
+    doAnswer((a) -> {
+      blocked.incrementAndGet();
+      return null;
+    }).when(grpcCtx).setError();
+  }
 }

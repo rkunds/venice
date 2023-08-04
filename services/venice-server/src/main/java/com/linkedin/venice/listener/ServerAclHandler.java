@@ -28,7 +28,7 @@ import org.apache.logging.log4j.Logger;
  * If both of them fail, the request will be rejected.
  */
 @ChannelHandler.Sharable
-public class ServerAclHandler extends SimpleChannelInboundHandler<HttpRequest> {
+public class ServerAclHandler extends SimpleChannelInboundHandler<HttpRequest> implements VeniceGrpcHandler {
   private static final Logger LOGGER = LogManager.getLogger(ServerAclHandler.class);
 
   public static final AttributeKey<Boolean> SERVER_ACL_APPROVED_ATTRIBUTE_KEY =
