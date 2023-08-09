@@ -159,7 +159,7 @@ public class ListenerService extends AbstractVeniceService {
     if (isGrpcEnabled && grpcServer == null) {
       grpcServer = new VeniceGrpcServer(
           new VeniceGrpcServerConfig.Builder().setPort(grpcPort)
-              .setService(new VeniceReadServiceImpl(storageReadRequestHandler))
+              .setService(new VeniceReadServiceImpl(channelInitializer))
               .build());
     }
   }

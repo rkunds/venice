@@ -1,11 +1,14 @@
 package com.linkedin.venice.fastclient.transport;
 
 import com.google.protobuf.ByteString;
+import com.linkedin.venice.client.exceptions.VeniceClientHttpException;
+import com.linkedin.venice.client.exceptions.VeniceClientRateExceededException;
 import com.linkedin.venice.client.store.transport.TransportClient;
 import com.linkedin.venice.client.store.transport.TransportClientResponse;
 import com.linkedin.venice.compression.CompressionStrategy;
 import com.linkedin.venice.exceptions.VeniceException;
 import com.linkedin.venice.fastclient.ClientConfig;
+import com.linkedin.venice.grpc.GrpcErrorCodes;
 import com.linkedin.venice.protocols.VeniceClientRequest;
 import com.linkedin.venice.protocols.VeniceReadServiceGrpc;
 import com.linkedin.venice.protocols.VeniceServerResponse;
@@ -127,6 +130,8 @@ public class GrpcTransportClient extends InternalTransportClient {
       clientStub.get(request, new StreamObserver<VeniceServerResponse>() {
         @Override
         public void onNext(VeniceServerResponse value) {
+          if (value.getErrorCode() != GrpcErrorCodes.OK)
+            handleError(value);
           valueFuture.complete(
               new TransportClientResponse(
                   value.getSchemaId(),
@@ -155,12 +160,14 @@ public class GrpcTransportClient extends InternalTransportClient {
       clientStub.batchGet(request, new StreamObserver<VeniceServerResponse>() {
         @Override
         public void onNext(VeniceServerResponse value) {
+          LOGGER.debug("Performing BatchGet in gRPC");
+          if (value.getErrorCode() != GrpcErrorCodes.OK)
+            handleError(value);
           valueFuture.complete(
               new TransportClientResponse(
                   value.getSchemaId(),
                   CompressionStrategy.valueOf(value.getCompressionStrategy()),
                   value.getData().toByteArray()));
-          LOGGER.debug("Performing BatchGet in gRPC");
         }
 
         @Override
@@ -175,6 +182,30 @@ public class GrpcTransportClient extends InternalTransportClient {
       });
 
       return valueFuture;
+    }
+
+    private void handleError(VeniceServerResponse response) {
+      // Create new field in .proto for error codes :slight_smile:
+      int statusCode = response.getErrorCode();
+      String errorMessage = response.getErrorMessage();
+      Exception exception;
+
+      switch (statusCode) {
+        case GrpcErrorCodes.BAD_REQUEST:
+          exception = new VeniceClientHttpException(errorMessage, statusCode);
+          break;
+        case GrpcErrorCodes.TOO_MANY_REQUESTS:
+          exception = new VeniceClientRateExceededException(errorMessage);
+          break;
+        case GrpcErrorCodes.KEY_NOT_FOUND:
+          valueFuture.complete(null);
+          return;
+        default:
+          exception = new VeniceException("grpc error occurred");
+          break;
+      }
+
+      valueFuture.completeExceptionally(exception);
     }
   }
 }

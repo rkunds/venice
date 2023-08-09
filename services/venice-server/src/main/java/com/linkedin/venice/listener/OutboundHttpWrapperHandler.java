@@ -7,13 +7,20 @@ import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 
+import com.google.protobuf.ByteString;
 import com.linkedin.davinci.listener.response.AdminResponse;
 import com.linkedin.davinci.listener.response.MetadataResponse;
 import com.linkedin.davinci.listener.response.ReadResponse;
 import com.linkedin.venice.HttpConstants;
 import com.linkedin.venice.compression.CompressionStrategy;
+import com.linkedin.venice.grpc.GrpcErrorCodes;
+import com.linkedin.venice.listener.grpc.GrpcHandlerContext;
+import com.linkedin.venice.listener.grpc.GrpcHandlerPipeline;
+import com.linkedin.venice.listener.grpc.GrpcStatsContext;
+import com.linkedin.venice.listener.grpc.VeniceGrpcHandler;
 import com.linkedin.venice.listener.response.BinaryResponse;
 import com.linkedin.venice.listener.response.HttpShortcutResponse;
+import com.linkedin.venice.protocols.VeniceServerResponse;
 import com.linkedin.venice.utils.ExceptionUtils;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -30,7 +37,7 @@ import java.nio.charset.StandardCharsets;
  * wraps raw bytes into an HTTP response object that HttpServerCodec expects
  */
 
-public class OutboundHttpWrapperHandler extends ChannelOutboundHandlerAdapter {
+public class OutboundHttpWrapperHandler extends ChannelOutboundHandlerAdapter implements VeniceGrpcHandler {
   private final StatsHandler statsHandler;
 
   public OutboundHttpWrapperHandler(StatsHandler handler) {
@@ -161,5 +168,66 @@ public class OutboundHttpWrapperHandler extends ChannelOutboundHandlerAdapter {
      *  writeAndFlush may have some performance issue since it will call the actual send every time.
      */
     ctx.writeAndFlush(response);
+  }
+
+  @Override
+  public void grpcRead(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+    pipeline.processRequest(ctx);
+  }
+
+  @Override
+  public void grpcWrite(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+
+    ByteBuf body;
+    CompressionStrategy compressionStrategy = CompressionStrategy.NO_OP;
+
+    ReadResponse obj = ctx.getReadResponse();
+    GrpcStatsContext statsContext = ctx.getGrpcStatsContext();
+    VeniceServerResponse.Builder veniceServerResponseBuilder = ctx.getVeniceServerResponseBuilder();
+    if (!ctx.hasError()) {
+      compressionStrategy = obj.getCompressionStrategy();
+
+      statsContext.setDatabaseLookupLatency(obj.getDatabaseLookupLatency());
+      statsContext.setStorageExecutionHandlerSubmissionWaitTime(obj.getStorageExecutionHandlerSubmissionWaitTime());
+      statsContext.setStorageExecutionQueueLen(obj.getStorageExecutionQueueLen());
+      statsContext.setSuccessRequestKeyCount(obj.getRecordCount());
+      statsContext.setMultiChunkLargeValueCount(obj.getMultiChunkLargeValueCount());
+      statsContext.setReadComputeLatency(obj.getReadComputeLatency());
+      statsContext.setReadComputeDeserializationLatency(obj.getReadComputeDeserializationLatency());
+      statsContext.setReadComputeSerializationLatency(obj.getReadComputeSerializationLatency());
+      statsContext.setDotProductCount(obj.getDotProductCount());
+      statsContext.setCosineSimilarityCount(obj.getCosineSimilarityCount());
+      statsContext.setHadamardProductCount(obj.getHadamardProductCount());
+      statsContext.setCountOperatorCount(obj.getCountOperatorCount());
+      statsContext.setKeySizeList(obj.getKeySizeList());
+      statsContext.setValueSizeList(obj.getValueSizeList());
+      statsContext.setValueSize(obj.getValueSize());
+      statsContext.setReadComputeOutputSize(obj.getReadComputeOutputSize());
+
+      veniceServerResponseBuilder.setCompressionStrategy(compressionStrategy.getValue());
+      veniceServerResponseBuilder.setResponseRCU(obj.getRCU());
+      veniceServerResponseBuilder.setIsStreamingResponse(obj.isStreamingResponse());
+
+      if (obj.isFound()) {
+        body = obj.getResponseBody();
+        veniceServerResponseBuilder.setSchemaId(obj.getResponseSchemaIdHeader());
+        statsContext.setResponseStatus(OK);
+      } else {
+        ctx.setError();
+        body = Unpooled.EMPTY_BUFFER;
+        statsContext.setResponseStatus(NOT_FOUND);
+        veniceServerResponseBuilder.setErrorCode(GrpcErrorCodes.KEY_NOT_FOUND);
+        veniceServerResponseBuilder.setErrorMessage("Key not found");
+      }
+    } else {
+      statsContext.setResponseStatus(HttpResponseStatus.BAD_REQUEST);
+      body = Unpooled.EMPTY_BUFFER;
+    }
+
+    byte[] array = new byte[body.readableBytes()];
+    body.getBytes(body.readerIndex(), array);
+    veniceServerResponseBuilder.setData(ByteString.copyFrom(array))
+        .setCompressionStrategy(compressionStrategy.getValue());
+    pipeline.processResponse(ctx);
   }
 }

@@ -3,6 +3,9 @@ package com.linkedin.venice.listener;
 import com.linkedin.venice.acl.DynamicAccessController;
 import com.linkedin.venice.acl.handler.StoreAclHandler;
 import com.linkedin.venice.exceptions.VeniceException;
+import com.linkedin.venice.listener.grpc.GrpcHandlerContext;
+import com.linkedin.venice.listener.grpc.GrpcHandlerPipeline;
+import com.linkedin.venice.listener.grpc.VeniceGrpcHandler;
 import com.linkedin.venice.meta.ReadOnlyStoreRepository;
 import com.linkedin.venice.meta.Version;
 import com.linkedin.venice.utils.SslUtils;
@@ -23,7 +26,7 @@ import javax.net.ssl.SSLPeerUnverifiedException;
  *
  * If both of them fail, the request will be rejected.
  */
-public class ServerStoreAclHandler extends StoreAclHandler {
+public class ServerStoreAclHandler extends StoreAclHandler implements VeniceGrpcHandler {
   public ServerStoreAclHandler(DynamicAccessController accessController, ReadOnlyStoreRepository metadataRepository) {
     super(accessController, metadataRepository);
   }
@@ -41,7 +44,7 @@ public class ServerStoreAclHandler extends StoreAclHandler {
     if (checkWhetherAccessHasAlreadyApproved(ctx)) {
       /**
        * Access has been approved by {@link ServerAclHandler}.
-        */
+       */
       ReferenceCountUtil.retain(req);
       ctx.fireChannelRead(req);
     } else {
@@ -62,5 +65,15 @@ public class ServerStoreAclHandler extends StoreAclHandler {
   protected static boolean checkWhetherAccessHasAlreadyApproved(ChannelHandlerContext ctx) {
     Attribute<Boolean> serverAclApprovedAttr = ctx.channel().attr(ServerAclHandler.SERVER_ACL_APPROVED_ATTRIBUTE_KEY);
     return Boolean.TRUE.equals(serverAclApprovedAttr.get());
+  }
+
+  @Override
+  public void grpcRead(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+    pipeline.processRequest(ctx);
+  }
+
+  @Override
+  public void grpcWrite(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+    pipeline.processResponse(ctx);
   }
 }

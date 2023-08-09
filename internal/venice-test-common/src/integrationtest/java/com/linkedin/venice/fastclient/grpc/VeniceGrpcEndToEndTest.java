@@ -68,18 +68,19 @@ public class VeniceGrpcEndToEndTest {
 
     cluster = ServiceFactory.getVeniceCluster(
         new VeniceClusterCreateOptions.Builder().numberOfControllers(1)
-            .numberOfPartitions(3)
+            .partitionSize(1000)
+            .numberOfPartitions(2)
             .maxNumberOfPartitions(5)
             .minActiveReplica(1)
             .numberOfRouters(1)
-            .numberOfServers(5)
+            .numberOfServers(2)
             .sslToStorageNodes(true)
             .enableGrpc(true)
             .extraProperties(props)
             .build());
 
     nettyToGrpcPortMap = cluster.getNettyToGrpcServerMap();
-    storeName = writeData("new-store");
+    storeName = writeData("testStore");
   }
 
   @AfterClass
@@ -89,11 +90,10 @@ public class VeniceGrpcEndToEndTest {
 
   public String writeData(String storeName) throws IOException {
     // 1. Create a new store in Venice
-    String uniqueStoreName = Utils.getUniqueString(storeName);
-    cluster.getNewStore(uniqueStoreName);
+    cluster.getNewStore(storeName);
     UpdateStoreQueryParams params = new UpdateStoreQueryParams().setStorageQuotaInByte(Store.UNLIMITED_STORAGE_QUOTA);
 
-    ControllerResponse updateStoreResponse = cluster.updateStore(uniqueStoreName, params);
+    ControllerResponse updateStoreResponse = cluster.updateStore(storeName, params);
     Assert.assertNull(updateStoreResponse.getError());
 
     // 2. Write data to the store w/ writeSimpleAvroFileWithUserSchema
@@ -102,16 +102,16 @@ public class VeniceGrpcEndToEndTest {
     TestWriteUtils.writeSimpleAvroFileWithUserSchema(inputDir, false, recordCnt);
 
     // 3. Run a push job to push the data to Venice (VPJ)
-    Properties vpjProps = TestWriteUtils.defaultVPJProps(cluster.getRandomRouterURL(), inputDirPath, uniqueStoreName);
+    Properties vpjProps = TestWriteUtils.defaultVPJProps(cluster.getRandomRouterURL(), inputDirPath, storeName);
     TestWriteUtils.runPushJob("test push job", vpjProps);
 
     cluster.useControllerClient(
         controllerClient -> TestUtils.waitForNonDeterministicAssertion(60, TimeUnit.SECONDS, () -> {
-          StoreResponse storeResponse = controllerClient.getStore(uniqueStoreName);
+          StoreResponse storeResponse = controllerClient.getStore(storeName);
           Assert.assertEquals(storeResponse.getStore().getCurrentVersion(), 1);
         }));
 
-    return uniqueStoreName;
+    return storeName;
   }
 
   private AvroGenericStoreClient<String, GenericRecord> getGenericFastClient(
@@ -144,7 +144,7 @@ public class VeniceGrpcEndToEndTest {
             .setMaxAllowedKeyCntInBatchGetReq(maxAllowedKeys + 1)
             .setRoutingPendingRequestCounterInstanceBlockThreshold(maxAllowedKeys + 1)
             .setSpeculativeQueryEnabled(false)
-            .setUseStreamingBatchGetAsDefault(true);
+            .setUseStreamingBatchGetAsDefault(false);
 
     AvroGenericStoreClient<String, GenericRecord> genericFastClient =
         getGenericFastClient(clientConfigBuilder, new MetricsRepository(), d2Client);
@@ -298,6 +298,50 @@ public class VeniceGrpcEndToEndTest {
 
     grpcFastClient.close();
     avroClient.close();
+  }
+
+  @Test
+  public void fastClientWithBatchStreaming() throws Exception {
+    Client grpcR2Client = ClientTestUtils.getR2Client(ClientTestUtils.FastClientHTTPVariant.HTTP_2_BASED_R2_CLIENT);
+    Client fastR2Client = ClientTestUtils.getR2Client(ClientTestUtils.FastClientHTTPVariant.HTTP_2_BASED_R2_CLIENT);
+
+    D2Client grpcD2Client = D2TestUtils.getAndStartHttpsD2Client(cluster.getZk().getAddress());
+    D2Client fastD2Client = D2TestUtils.getAndStartHttpsD2Client(cluster.getZk().getAddress());
+
+    ClientConfigBuilder<Object, Object, SpecificRecord> clientConfigBuilder =
+        new com.linkedin.venice.fastclient.ClientConfig.ClientConfigBuilder<>().setStoreName(storeName)
+            .setR2Client(fastR2Client)
+            .setMaxAllowedKeyCntInBatchGetReq(maxAllowedKeys + 1)
+            .setRoutingPendingRequestCounterInstanceBlockThreshold(maxAllowedKeys + 1)
+            .setSpeculativeQueryEnabled(false)
+            .setUseStreamingBatchGetAsDefault(true);
+
+    ClientConfigBuilder<Object, Object, SpecificRecord> grpcClientConfigBuilder =
+        new com.linkedin.venice.fastclient.ClientConfig.ClientConfigBuilder<>().setStoreName(storeName)
+            .setUseGrpc(true)
+            .setR2Client(grpcR2Client)
+            .setNettyServerToGrpcAddressMap(nettyToGrpcPortMap)
+            .setMaxAllowedKeyCntInBatchGetReq(maxAllowedKeys + 1)
+            .setRoutingPendingRequestCounterInstanceBlockThreshold(maxAllowedKeys + 1)
+            .setSpeculativeQueryEnabled(false)
+            .setUseStreamingBatchGetAsDefault(true);
+
+    AvroGenericStoreClient<String, GenericRecord> genericFastClient =
+        getGenericFastClient(clientConfigBuilder, new MetricsRepository(), fastD2Client);
+    AvroGenericStoreClient<String, GenericRecord> grpcFastClient =
+        getGenericFastClient(grpcClientConfigBuilder, new MetricsRepository(), grpcD2Client);
+
+    Set<Set<String>> keySets = getKeySets();
+    for (Set<String> keySet: keySets) {
+      Map<String, GenericRecord> fastClientRet = genericFastClient.batchGet(keySet).get();
+      Map<String, GenericRecord> grpcClientRet = grpcFastClient.batchGet(keySet).get();
+
+      for (String key: keySet) {
+        LOGGER.info("key: {}, fastClientRet: {}", key, fastClientRet.get(key));
+        LOGGER.info("key: {}, grpcClientRet: {}", key, grpcClientRet.get(key));
+        Assert.assertEquals(fastClientRet.get(key), grpcClientRet.get(key));
+      }
+    }
   }
 
   private Set<Set<String>> getKeySets() {

@@ -24,6 +24,10 @@ import com.linkedin.venice.compute.protocol.request.router.ComputeRouterRequestK
 import com.linkedin.venice.compute.protocol.response.ComputeResponseRecordV1;
 import com.linkedin.venice.exceptions.VeniceException;
 import com.linkedin.venice.exceptions.VeniceNoStoreException;
+import com.linkedin.venice.grpc.GrpcErrorCodes;
+import com.linkedin.venice.listener.grpc.GrpcHandlerContext;
+import com.linkedin.venice.listener.grpc.GrpcHandlerPipeline;
+import com.linkedin.venice.listener.grpc.VeniceGrpcHandler;
 import com.linkedin.venice.listener.request.AdminRequest;
 import com.linkedin.venice.listener.request.ComputeRouterRequestWrapper;
 import com.linkedin.venice.listener.request.DictionaryFetchRequest;
@@ -98,7 +102,7 @@ import org.apache.logging.log4j.Logger;
  * handler will execute parallel lookups for {@link MultiGetRouterRequestWrapper}.
  */
 @ChannelHandler.Sharable
-public class StorageReadRequestHandler extends ChannelInboundHandlerAdapter {
+public class StorageReadRequestHandler extends ChannelInboundHandlerAdapter implements VeniceGrpcHandler {
   private static final Logger LOGGER = LogManager.getLogger(StorageReadRequestHandler.class);
 
   private final DiskHealthCheckService diskHealthCheckService;
@@ -347,6 +351,68 @@ public class StorageReadRequestHandler extends ChannelInboundHandlerAdapter {
               "Unrecognized object in StorageExecutionHandler",
               HttpResponseStatus.INTERNAL_SERVER_ERROR));
     }
+  }
+
+  @Override
+  public void grpcRead(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+    if (ctx.hasError()) {
+      pipeline.processRequest(ctx);
+      return;
+    }
+
+    RouterRequest request = ctx.getRouterRequest();
+    final long preSubmissionTimeNs = System.nanoTime();
+    ReadResponse response = null;
+    double submissionWaitTime = -1;
+
+    try {
+      if (request.shouldRequestBeTerminatedEarly()) {
+        throw new VeniceRequestEarlyTerminationException(request.getStoreName());
+      }
+
+      submissionWaitTime = LatencyUtils.getLatencyInMS(preSubmissionTimeNs);
+      // int queueLen = executor.getQueue.size(); we do not need this here, we do not have a executor for grpc yet
+      switch (request.getRequestType()) {
+        case SINGLE_GET:
+          response = handleSingleGetRequest((GetRouterRequest) request);
+          break;
+        case MULTI_GET:
+          response = handleMultiGetRequest((MultiGetRouterRequestWrapper) request);
+          break;
+        default:
+          ctx.setError();
+          ctx.getVeniceServerResponseBuilder()
+              .setErrorCode(GrpcErrorCodes.BAD_REQUEST)
+              .setErrorMessage("Unknown request type: " + request.getRequestType());
+      }
+    } catch (VeniceNoStoreException e) {
+      ctx.setError();
+      ctx.getVeniceServerResponseBuilder()
+          .setErrorCode(GrpcErrorCodes.BAD_REQUEST)
+          .setErrorMessage("No storage exists for: " + e.getStoreName());
+    } catch (Exception e) {
+      ctx.setError();
+      ctx.getVeniceServerResponseBuilder()
+          .setErrorCode(GrpcErrorCodes.INTERNAL_ERROR)
+          .setErrorMessage(e.getMessage() != null ? e.getMessage() : "Internal Error");
+    }
+
+    if (!ctx.hasError() && response != null) {
+      response.setStorageExecutionSubmissionWaitTime(submissionWaitTime);
+      response.setRCU(ReadQuotaEnforcementHandler.getRcu(request));
+      if (request.isStreamingRequest()) {
+        response.setStreamingResponse();
+      }
+
+      ctx.setReadResponse(response);
+    }
+
+    pipeline.processRequest(ctx);
+  }
+
+  @Override
+  public void grpcWrite(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+    pipeline.processResponse(ctx);
   }
 
   private ThreadPoolExecutor getExecutor(RequestType requestType) {

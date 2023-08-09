@@ -26,4 +26,7 @@ message VeniceServerResponse {
   uint32 compressionStrategy = 3;
   uint32 responseRCU = 4;
   bool   isStreamingResponse = 5;
+
+  uint32 errorCode = 6;
+  string errorMessage = 7;
 }

@@ -1,6 +1,10 @@
 package com.linkedin.venice.listener;
 
 import com.linkedin.venice.exceptions.VeniceException;
+import com.linkedin.venice.listener.grpc.GrpcHandlerContext;
+import com.linkedin.venice.listener.grpc.GrpcHandlerPipeline;
+import com.linkedin.venice.listener.grpc.GrpcStatsContext;
+import com.linkedin.venice.listener.grpc.VeniceGrpcHandler;
 import com.linkedin.venice.listener.request.AdminRequest;
 import com.linkedin.venice.listener.request.ComputeRouterRequestWrapper;
 import com.linkedin.venice.listener.request.DictionaryFetchRequest;
@@ -11,6 +15,7 @@ import com.linkedin.venice.listener.request.MultiGetRouterRequestWrapper;
 import com.linkedin.venice.listener.request.RouterRequest;
 import com.linkedin.venice.listener.response.HttpShortcutResponse;
 import com.linkedin.venice.meta.QueryAction;
+import com.linkedin.venice.protocols.VeniceClientRequest;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.FullHttpRequest;
@@ -34,7 +39,8 @@ import java.util.stream.Collectors;
  * {@link FullHttpRequest} for each request.
  * The downstream handler is not expected to use this object any more.
  */
-public class RouterRequestHttpHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
+public class RouterRequestHttpHandler extends SimpleChannelInboundHandler<FullHttpRequest>
+    implements VeniceGrpcHandler {
   private final StatsHandler statsHandler;
   private final Map<String, Integer> storeToEarlyTerminationThresholdMSMap;
 
@@ -124,6 +130,26 @@ public class RouterRequestHttpHandler extends SimpleChannelInboundHandler<FullHt
     } catch (VeniceException e) {
       ctx.writeAndFlush(new HttpShortcutResponse(e.getMessage(), HttpResponseStatus.BAD_REQUEST));
     }
+  }
+
+  @Override
+  public void grpcRead(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+    VeniceClientRequest clientRequest = ctx.getVeniceClientRequest();
+    GrpcStatsContext statsContext = ctx.getGrpcStatsContext();
+
+    RouterRequest routerRequest = clientRequest.getIsBatchRequest()
+        ? MultiGetRouterRequestWrapper.parseMultiGetGrpcRequest(clientRequest)
+        : GetRouterRequest.grpcGetRouterRequest(clientRequest);
+
+    statsContext.setRequestInfo(routerRequest);
+
+    ctx.setRouterRequest(routerRequest);
+    pipeline.processRequest(ctx);
+  }
+
+  @Override
+  public void grpcWrite(GrpcHandlerContext ctx, GrpcHandlerPipeline pipeline) {
+    pipeline.processResponse(ctx);
   }
 
   /**

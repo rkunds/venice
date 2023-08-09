@@ -8,6 +8,8 @@ import com.linkedin.venice.acl.DynamicAccessController;
 import com.linkedin.venice.acl.StaticAccessController;
 import com.linkedin.venice.exceptions.VeniceException;
 import com.linkedin.venice.helix.HelixCustomizedViewOfflinePushRepository;
+import com.linkedin.venice.listener.grpc.GrpcHandlerPipeline;
+import com.linkedin.venice.listener.grpc.VeniceGrpcHandler;
 import com.linkedin.venice.meta.ReadOnlyStoreRepository;
 import com.linkedin.venice.meta.Store;
 import com.linkedin.venice.read.RequestType;
@@ -25,6 +27,8 @@ import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.timeout.IdleStateHandler;
 import io.tehuti.metrics.MetricsRepository;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -49,6 +53,9 @@ public class HttpChannelInitializer extends ChannelInitializer<SocketChannel> {
   private final VeniceHttp2PipelineInitializerBuilder http2PipelineInitializerBuilder;
   AggServerQuotaUsageStats quotaUsageStats;
   AggServerQuotaTokenBucketStats quotaTokenBucketStats;
+
+  List<VeniceGrpcHandler> inboundHandlers;
+  List<VeniceGrpcHandler> outboundHandlers;
 
   public HttpChannelInitializer(
       ReadOnlyStoreRepository storeMetadataRepository,
@@ -208,5 +215,43 @@ public class HttpChannelInitializer extends ChannelInitializer<SocketChannel> {
     } else {
       httpPipelineInitializer.accept(ch.pipeline(), true);
     }
+  }
+
+  public GrpcHandlerPipeline initGrpcHandlers() {
+    GrpcHandlerPipeline pipeline = new GrpcHandlerPipeline();
+    inboundHandlers = new ArrayList<>();
+    outboundHandlers = new ArrayList<>();
+
+    // will replicate initChannel logic
+
+    StatsHandler statsHandler = new StatsHandler(singleGetStats, multiGetStats, computeStats);
+    pipeline.addHandler(statsHandler);
+
+    OutboundHttpWrapperHandler outboundHttpWrapperHandler = new OutboundHttpWrapperHandler(statsHandler);
+    pipeline.addHandler(outboundHttpWrapperHandler);
+
+    if (sslFactory.isPresent()) { // set acls
+      if (aclHandler.isPresent()) {
+        pipeline.addHandler(aclHandler.get());
+      }
+
+      if (storeAclHandler.isPresent()) {
+        pipeline.addHandler(storeAclHandler.get());
+      }
+    }
+
+    RouterRequestHttpHandler grpcRouterRequestHandler =
+        new RouterRequestHttpHandler(statsHandler, serverConfig.getStoreToEarlyTerminationThresholdMSMap());
+    pipeline.addHandler(grpcRouterRequestHandler);
+
+    if (quotaEnforcer != null) {
+      inboundHandlers.add(quotaEnforcer);
+      outboundHandlers.add(0, quotaEnforcer);
+      pipeline.addHandler(quotaEnforcer);
+    }
+
+    pipeline.addHandler(requestHandler);
+
+    return pipeline;
   }
 }
